@@ -1,0 +1,890 @@
+---
+title: "Covid and Air Travel using Sentiment Analyisis, LSA and LDA"
+author: "Manali"
+date: "7/7/2021"
+output: html_document
+---
+
+```{r}
+
+#install.packages("rlang")
+#install.packages("rtweet")
+#install.packages("twitteR")
+#install.packages("sentimentr")
+#install.packages("tidyverse")
+#install.packages("Rcpp")
+devtools::install_github("kbenoit/quanteda.dictionaries")
+library("quanteda.dictionaries")
+library(quanteda)
+library(tidyverse)
+library(rtweet)
+library(twitteR)
+library(sentimentr)
+library(caret)
+library(broom)
+library(tidytext)
+library(dplyr)
+library(tidyr)
+library(topicmodels)
+library(ldatuning)
+library(lsa)
+library(LSAfun)
+library(stats)
+```
+
+
+```{r}
+#delta <- search_tweets(c("#deltaairlines OR delta airlines OR #DeltaAirlines OR Delta Airlines"), n = 10000, retryonratelimit = TRUE)
+```
+
+
+```{r}
+#american <- search_tweets(c("#americanairlines OR american airlines OR #AmericanAirlines OR American Airlines"), n = 10000, retryonratelimit = TRUE)
+```
+
+
+```{r}
+#united <- search_tweets(c("#unitedairlines OR united airlines OR #UnitedAirlines OR United Airlines"), n = 10000, retryonratelimit = TRUE)
+```
+
+
+```{r}
+#combined Delta, United and American tweets into one data frame
+airtweets <- rbind(delta, united, american)
+  
+head(airtweets)
+
+airtweets_raw <- airtweets
+
+airtweets_raw$is_retweet <- as.factor(airtweets_raw$is_retweet)
+airtweets_raw$source <- as.factor(airtweets_raw$source)
+
+
+#shows that Apple products (iPhone & iPad) are used 45.26% of the time which is 16% more than the next highest option, Android.
+airtweets_raw %>%
+  count(source)%>%
+  mutate(freq=(n/sum(n))*100) %>%
+  arrange(desc(freq))
+
+#shows that overall, 85% of these Twitter users are not posting original content
+airtweets_raw %>%
+  count(is_retweet == TRUE) %>%
+  mutate(freq=(n/sum(n))) %>%
+  arrange(desc(freq))
+
+```
+
+UNITED AIRLINES SENTIMENT ANALYSIS
+
+```{r}
+head(united)
+
+united_raw <- united
+
+united_raw$is_retweet <- as.factor(united_raw$is_retweet)
+united_raw$source <- as.factor(united_raw$source)
+ 
+#preprocessing
+united_raw_token <- tokens(united_raw$text, what = "word",
+                             remove_numbers = TRUE, remove_punct = TRUE, remove_symbols = TRUE, 
+                           remove_hyphens = TRUE)
+head(united_raw_token)
+
+united_raw_dfm <- united_raw_token %>% 
+  tokens_remove(stopwords(source = "smart")) %>% 
+  tokens_wordstem() %>% 
+  tokens_tolower() %>% 
+  dfm()
+
+united_raw_dfm
+
+tokenfreq<-textstat_frequency(united_raw_dfm, n=100)#Uses Quanteda
+head(tokenfreq, 10)
+
+tokenfreq1<-data.frame(rowSums(united_raw_dfm))
+colnames(tokenfreq1)<-"Freq"
+summary(tokenfreq1)
+
+#shows that the Tweeters used around 18 characters per Tweet
+ggplot(tokenfreq1, aes(x = Freq)) +
+geom_histogram(binwidth = 1) +
+labs(y = "Number of Documents", x = "Tokens Count Per Document",
+title = "Distribution of Tokens per Document")
+
+textplot_wordcloud(
+  united_raw_dfm,
+  min_size = 0.5,
+  max_size = 4,
+  min_count = 10,
+  max_words = 200,
+  color = "darkblue",
+  font = NULL,
+  adjust = 0,
+  rotation = 0.1,
+  random_order = FALSE,
+  random_color = FALSE,
+  ordered_color = FALSE,
+  labelcolor = "gray20",
+  labelsize = 1.5,
+  labeloffset = 0,
+  fixed_aspect = TRUE,
+  comparison = FALSE
+)
+
+#shows that Apple products (iPhone & iPad) are used 40.5% of the time which is 14.1% more than the next highest option, Android. Using just the United data, there is a 5% reduction in Apple product users as compared to the 3 Airlines as a whole group shown above.
+united_raw %>%
+  count(source)%>%
+  mutate(freq=(n/sum(n))*100) %>%
+  arrange(desc(freq))
+
+#shows that over 77% of these Twitter users are not posting original content. Again this number is 8% below the mean of the whole group combined
+united_raw %>%
+  count(is_retweet == TRUE) %>%
+  mutate(freq=(n/sum(n))) %>%
+  arrange(desc(freq))
+
+```
+
+
+```{r}
+#creating Bing dictionary for Sentiment Analysis
+
+corp_united <- corpus(united_raw, text_field = "text")
+positive_bing <- scan("C:/Users/aacou/Desktop/Masters/Text Analytics/Projects/positive-words.txt", what = "char", sep = "\n", skip = 35, quiet = T)
+negative_bing <- scan("C:/Users/aacou/Desktop/Masters/Text Analytics/Projects/negative-words.txt", what = "char", sep = "\n", skip = 35, quiet = T)
+
+sentiment_bing <- dictionary(list(positive = positive_bing, negative = negative_bing))
+
+```
+
+
+```{r}
+dfm_sentiment <- dfm(corp_united, dictionary = sentiment_bing)
+dfm_sentiment
+```
+
+
+```{r}
+dfm_sentiment_df <- convert(dfm_sentiment, to = "data.frame")
+dfm_sentiment_df$net <- (dfm_sentiment_df$positive)-(dfm_sentiment_df$negative)
+summary(dfm_sentiment_df)
+```
+
+
+```{r}
+output_nrc <- liwcalike(corp_united,
+                        dictionary = data_dictionary_NRC)
+head(output_nrc)
+
+```
+
+```{r}
+dfm_sentiment_propUnited <- dfm_weight(dfm_sentiment, scheme = "prop")
+dfm_sentiment_propUnited
+
+sentiment_United <- convert(dfm_sentiment_propUnited, "data.frame") %>%
+  gather(positive, negative, key = "Polarity", value = "Share") %>%
+  mutate(document = as_factor(document)) %>%
+  rename(Review = document)
+
+#Sentiment appears to lean negatively for United Airlines
+ggplot(sentiment_United, aes(Review, Share, fill = Polarity, group = Polarity)) +
+geom_bar(stat='identity', position = position_dodge(), size = 1) +
+scale_fill_brewer(palette = "Set1") +
+theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+ggtitle("Sentiment scores in United Reviews (relative)")
+
+```
+
+
+
+UNITED AIRLINES LDA
+
+```{r}
+#LDA
+set.seed(111)
+united_raw_samp <-united_raw[sample(nrow(united_raw), 200), ]#
+united_raw_token2 <- tokens(united_raw_samp$text, what = "word",
+                            remove_numbers = TRUE, remove_punct = TRUE,
+                            remove_symbols = TRUE, remove_hyphens = TRUE)
+
+united_raw_dfm<-united_raw_token2 %>%
+  tokens_remove(stopwords(source = "smart")) %>%
+  tokens_wordstem() %>%
+  tokens_tolower() %>%
+  dfm()
+
+
+unitedrowTotals <- apply(united_raw_dfm , 1, sum)
+uniteddtm.new   <- united_raw_dfm[unitedrowTotals> 0, ]
+
+united_raw_dfm2 <-uniteddtm.new%>% 
+  dfm_trim(min_docfreq = 0.01, max_docfreq = 0.90, docfreq_type = "prop")
+
+united_demo_token1<-as.matrix(united_raw_dfm) 
+united_demo_token1[1:3,1:12]
+
+
+K <- 10
+united_lda <-LDA(united_raw_dfm, K, method="Gibbs", control=list(iter = 200, verbose = 25))
+united_topics <- tidy(united_lda, matrix = "beta")
+
+unitedldaResult <- posterior(united_lda)
+
+unitedbeta <- unitedldaResult$terms # get beta from results
+dim(unitedbeta)
+
+unitedtheta <- unitedldaResult$topics
+dim(unitedtheta)
+
+terms(united_lda, 10)
+
+united_topics <- tidy(united_lda, matrix = "beta")
+
+terms_per_topic <- 10
+united_top_terms <- united_topics %>%
+  group_by(topic) %>%
+  top_n(terms_per_topic, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+united_top_terms <- united_top_terms %>%
+  group_by(topic) %>%
+  slice(1:terms_per_topic) %>%
+  ungroup()
+
+united_top_terms$topic <- factor(united_top_terms$topic)
+
+#If we exclude United and Airlines, the top terms are billion, employee, bailout, stock, warn and layoff.
+united_top_terms %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(term, beta, fill=topic)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ topic, scales = "free") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip()
+
+united_documents <- tidy(united_lda, matrix = "gamma")
+united_documents
+
+unitedtuningresult <- FindTopicsNumber(united_raw_dfm,
+                           topics = seq(from = 2, to = 15, by = 1),
+                           metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+                           method = "Gibbs",
+                           control = list(seed = 1971),
+                           mc.cores = NA,
+                           return_models= TRUE,
+                           verbose = TRUE
+)
+
+FindTopicsNumber_plot(unitedtuningresult) #5 is approximately the ideal number of topics
+
+
+```
+
+
+
+UNITED AIRLINES LSA
+
+```{r}
+#LSA
+
+united_raw_dfm2<-united_raw_token2 %>%
+  tokens_remove(stopwords(source = "smart")) %>%
+  tokens_tolower() %>%
+  dfm()
+united_tfidf<-t(dfm_tfidf(united_raw_dfm2, scheme_tf = "prop", scheme_df = "inverse", base = 10))
+united_tfidf1<-as.matrix(united_tfidf)
+united_tfidf1[1:6,1:6]
+
+united_LSAspace <- lsa(united_tfidf, dims=dimcalc_share())
+
+united_LSAspace$tk[1:5,1:5]
+united_LSAspace$dk[1:5,1:5]
+united_LSAspace$sk[1:10]
+
+
+united_tk2 = t(united_LSAspace$sk * t(united_LSAspace$tk))
+united_dk2 = t(united_LSAspace$sk * t(united_LSAspace$dk))
+
+plot(united_tk2[,1], y= united_tk2[,2], col="red", cex=.50, main="TK Plot")
+text(united_tk2[,1], y= united_tk2[,2], labels=rownames(united_tk2) , cex=.70)
+
+plot(united_dk2[,1], y= united_dk2[,2], col="blue", pch="+", main="DK Plot")
+text(united_dk2[,1], y= united_dk2[,2], labels=rownames(united_dk2), cex=.70)
+
+united_cosim <- rownames(united_tk2)
+united_cosimSpace <- multicos(united_cosim, tvectors=united_tk2, breakdown=TRUE)
+
+#While the purpose of my project was to calculate how impactful Covid has been on the airlines, the cosine similarity points more toward "warns" and "laid" (as in laid off) at 98% and "warns" "workers" at 64.8% as these are results of the impact Covid is having on the world as a whole. "United" and "virus" have a cosine similarity of 31.4%
+united_cosimSpace[1:10,1:10]
+
+united_cosim2 <- rownames(united_dk2)
+united_cosimSpace2 <- multicos(united_cosim2, tvectors=united_dk2, breakdown=F)
+united_cosimSpace2[1:6,1:6]
+
+#I'm most interested in the neighbors of Covid, virus and coronavirus
+neighbors("Covid", n=10, tvectors = united_tk2, breakdown = T) #"halt", "tighter" & "services" at 64%
+
+neighbors("virus", n=10, tvectors = united_tk2, breakdown = T) #"worst", "case", "scenario" & "outbreak" ~96.9%
+
+neighbors("coronavirus", n=10, tvectors = united_tk2, breakdown = T) #not as interesting as the other options but neighbors to "news" and "bbc" in the high 95% range as I'm sure it's the more frequently used term for Covid-19 by the news agencies
+
+neighbors("united", n=10, tvectors = united_tk2, breakdown = T) #certain words jump off the page, like "employees", "layoff" & "warnings" between ~62.6% and 55.8% but then there is "billion" at 51% referring to the billions of dollars that United has lost in the last 3 months 
+
+neighbors("safety", n=10, tvectors = united_tk2, breakdown = T)
+
+neighbors("stock", n=10, tvectors = united_tk2, breakdown = T) #appears people are questioning the unfortunate timing of United's recent choice to buyback stock as "stock" is highly correlated to "times", "tough" and "rainy" at nearly 99% each
+
+plot_neighbors("virus", n=15, tvectors = united_tk2) #"virus" is associated with the words "worst case scenario outbreak officials signal hurting breaking & airline"
+
+
+```
+
+
+
+
+
+AMERICAN AIRLINES SENTIMENT ANALYSIS
+
+
+```{r}
+head(american)
+
+american_raw <- american
+
+american_raw$is_retweet <- as.factor(american_raw$is_retweet)
+american_raw$source <- as.factor(american_raw$source)
+ 
+#preprocessing
+american_raw_token <- tokens(american_raw$text, what = "word",
+                             remove_numbers = TRUE, remove_punct = TRUE,
+                             remove_symbols = TRUE,
+                             remove_hyphens = TRUE)
+head(american_raw_token)
+
+american_raw_dfm <- american_raw_token %>% 
+  tokens_remove(stopwords(source = "smart")) %>% 
+  tokens_wordstem() %>% 
+  tokens_tolower() %>% 
+  dfm()
+
+american_raw_dfm
+
+tokenfreq<-textstat_frequency(american_raw_dfm, n=100)#Uses Quanteda
+head(tokenfreq, 10)
+
+americantokenfreq1<-data.frame(rowSums(american_raw_dfm))
+colnames(americantokenfreq1)<-"Freq"
+summary(americantokenfreq1) #Mean shows that the Tweeters used around 17 characters per Tweet
+
+#shows that there is a large set of Tweets that used 20 characters per Tweet
+ggplot(americantokenfreq1, aes(x = Freq)) +
+geom_histogram(binwidth = 1) +
+labs(y = "Number of Documents", x = "Tokens Count Per Document",
+title = "Distribution of Tokens per Document")
+
+# People were outraged by American Airlines allowing Senator Ted Cruz to fly without a face mask
+textplot_wordcloud(
+  american_raw_dfm,
+  min_size = 0.5,
+  max_size = 4,
+  min_count = 1000,
+  max_words = 2000,
+  color = "darkblue",
+  font = NULL,
+  adjust = 0,
+  rotation = 0.1,
+  random_order = FALSE,
+  random_color = FALSE,
+  ordered_color = FALSE,
+  labelcolor = "gray20",
+  labelsize = 1.5,
+  labeloffset = 0,
+  fixed_aspect = TRUE,
+  comparison = FALSE
+)
+
+#shows that Apple products (iPhone & iPad) are used 51.23% of the time which is 21.73% more than the next highest option, Android. Using just the American Airlines data, these Tweeters use Apple products approximately 6% more as compared to the 3 Airlines as a whole group shown above.
+american_raw %>%
+  count(source)%>%
+  mutate(freq=(n/sum(n))*100) %>%
+  arrange(desc(freq))
+
+#shows that over 93% of these Twitter users are not posting original content. Again this number is 4% above the mean of the whole group combined and assuredly has to do with the Ted Cruz gaffe for taking off his mask during a flight.
+american_raw %>%
+  count(is_retweet == TRUE) %>%
+  mutate(freq=(n/sum(n))) %>%
+  arrange(desc(freq))
+
+```
+
+
+```{r}
+#creating Bing dictionary for Sentiment Analysis
+
+corp_american <- corpus(american_raw, text_field = "text")
+positive_bing <- scan("C:/Users/aacou/Desktop/Masters/Text Analytics/Projects/positive-words.txt", what = "char", sep = "\n", skip = 35, quiet = T)
+negative_bing <- scan("C:/Users/aacou/Desktop/Masters/Text Analytics/Projects/negative-words.txt", what = "char", sep = "\n", skip = 35, quiet = T)
+
+sentiment_bing <- dictionary(list(positive = positive_bing, negative = negative_bing))
+
+```
+
+
+```{r}
+american_dfm_sentiment <- dfm(corp_american, dictionary = sentiment_bing)
+american_dfm_sentiment
+```
+
+
+```{r}
+# Using Sentiment Analysis, it shows that a huge % of people tweeting about American Airlines at this time have a negative sentiment. The Negative Mean is 97.5% while the Positive Mean is only 43%
+american_dfm_sentiment_df <- convert(american_dfm_sentiment, to = "data.frame")
+american_dfm_sentiment_df$net <-(american_dfm_sentiment_df$positive)-(american_dfm_sentiment_df$negative)
+summary(american_dfm_sentiment_df)
+```
+
+
+```{r}
+#A lot of fear, anger and exclamations
+american_output_nrc <- liwcalike(corp_american,
+                        dictionary = data_dictionary_NRC)
+head(american_output_nrc)
+
+```
+
+```{r}
+dfm_sentiment_propAmerican <- dfm_weight(american_dfm_sentiment, scheme = "prop")
+dfm_sentiment_propAmerican
+
+sentiment_American <- convert(dfm_sentiment_propAmerican, "data.frame") %>%
+  gather(positive, negative, key = "Polarity", value = "Share") %>%
+  mutate(document = as_factor(document)) %>%
+  rename(Review = document)
+
+#Sentiment appears to lean negatively for American Airlines
+ggplot(sentiment_American, aes(Review, Share, fill = Polarity, group = Polarity)) +
+geom_bar(stat='identity', position = position_dodge(), size = 1) +
+scale_fill_brewer(palette = "Set1") +
+theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+ggtitle("Sentiment scores in American Reviews (relative)")
+
+```
+
+
+American LDA
+
+```{r}
+#LDA
+set.seed(111)
+american_raw_samp <-american_raw[sample(nrow(american_raw), 200), ]#
+american_raw_token2 <- tokens(american_raw_samp$text, what = "word",
+                            remove_numbers = TRUE, remove_punct = TRUE,
+                            remove_symbols = TRUE, remove_hyphens = TRUE)
+
+american_raw_dfm<-american_raw_token2 %>%
+  tokens_remove(stopwords(source = "smart")) %>%
+  tokens_wordstem() %>%
+  tokens_tolower() %>%
+  dfm()
+
+
+americanrowTotals <- apply(american_raw_dfm , 1, sum)
+americandtm.new   <- american_raw_dfm[americanrowTotals> 0, ]
+
+american_raw_dfm2 <-americandtm.new%>% 
+  dfm_trim(min_docfreq = 0.01, max_docfreq = 0.90, docfreq_type = "prop")
+
+american_demo_token1<-as.matrix(american_raw_dfm) 
+american_demo_token1[1:3,1:12]
+
+
+K <- 10
+american_lda <-LDA(american_raw_dfm, K, method="Gibbs", control=list(iter = 200, verbose = 25))
+american_topics <- tidy(american_lda, matrix = "beta")
+
+americanldaResult <- posterior(american_lda)
+
+americanbeta <- americanldaResult$terms # get beta from results
+dim(americanbeta)
+
+americantheta <- americanldaResult$topics
+dim(americantheta)
+
+terms(american_lda, 10)
+
+american_topics <- tidy(american_lda, matrix = "beta")
+
+terms_per_topic <- 10
+american_top_terms <- american_topics %>%
+  group_by(topic) %>%
+  top_n(terms_per_topic, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+american_top_terms <- american_top_terms %>%
+  group_by(topic) %>%
+  slice(1:terms_per_topic) %>%
+  ungroup()
+
+american_top_terms$topic <- factor(american_top_terms$topic)
+
+#If we remove American and Airlines, the top terms are ted, cruz, wear, mask, and investigate
+american_top_terms %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(term, beta, fill=topic)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ topic, scales = "free") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip()
+
+american_documents <- tidy(american_lda, matrix = "gamma")
+american_documents
+
+americantuningresult <- FindTopicsNumber(american_raw_dfm,
+                           topics = seq(from = 2, to = 15, by = 1),
+                           metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+                           method = "Gibbs",
+                           control = list(seed = 1971),
+                           mc.cores = NA,
+                           return_models= TRUE,
+                           verbose = TRUE
+)
+
+FindTopicsNumber_plot(americantuningresult) #3 is the ideal number of topics
+```
+
+
+
+AMERICAN AIRLINES LSA
+
+```{r}
+#LSA
+
+american_raw_dfm2<-american_raw_token2 %>%
+  tokens_remove(stopwords(source = "smart")) %>%
+  tokens_tolower() %>%
+  dfm()
+american_tfidf<-t(dfm_tfidf(american_raw_dfm2, scheme_tf = "prop", scheme_df = "inverse", base = 10))
+american_tfidf1<-as.matrix(american_tfidf)
+american_tfidf1[1:6,1:6]
+
+american_LSAspace <- lsa(american_tfidf, dims=dimcalc_share())
+
+american_LSAspace$tk[1:5,1:5]
+american_LSAspace$dk[1:5,1:5]
+american_LSAspace$sk[1:10]
+
+
+american_tk2 = t(american_LSAspace$sk * t(american_LSAspace$tk))
+american_dk2 = t(american_LSAspace$sk * t(american_LSAspace$dk))
+
+plot(american_tk2[,1], y= american_tk2[,2], col="red", cex=.50, main="TK Plot")
+text(american_tk2[,1], y= american_tk2[,2], labels=rownames(american_tk2) , cex=.70)
+
+plot(american_dk2[,1], y= american_dk2[,2], col="blue", pch="+", main="DK Plot")
+text(american_dk2[,1], y= american_dk2[,2], labels=rownames(american_dk2), cex=.70)
+
+american_cosim <- rownames(american_tk2)
+american_cosimSpace <- multicos(american_cosim, tvectors=american_tk2, breakdown=TRUE)
+
+#While the purpose of my project was to calculate how impactful Covid has been on the airlines, the cosine similarity points toward the customers demanding that American be held accountable for lackluster safety enforcement through words like "hold", "accountable", "putting", "flyers", "lives", and "risk" at 94%. These results show the impact Covid is having on the world as a whole. 
+american_cosimSpace[1:10,1:10]
+
+american_cosim2 <- rownames(american_dk2)
+american_cosimSpace2 <- multicos(american_cosim2, tvectors=american_dk2, breakdown=F)
+american_cosimSpace2[1:6,1:6]
+
+#I'm most interested in the neighbors of Covid, virus and coronavirus
+neighbors("Covid", n=10, tvectors = american_tk2, breakdown = T) #"Covid" came up at NA
+
+neighbors("virus", n=10, tvectors = american_tk2, breakdown = T) #Certainly no business wants to be associated with "spreading", "virus" & "willingly" at 100%
+
+neighbors("coronavirus", n=10, tvectors = american_tk2, breakdown = T) #"coronavirus" came up at NA
+
+neighbors("american", n=10, tvectors = american_tk2, breakdown = T) #American is associated with this Ted Cruz story at 85% cosine similarity, while mask is 80% and GOP is nearly 75%. The world is hyper political. 
+
+neighbors("safety", n=10, tvectors = american_tk2, breakdown = T) #For Safety, there is a high association with "disdain" at 99.9% along with "commitment" and "protecting" at nearly 98%
+
+neighbors("stock", n=10, tvectors = american_tk2, breakdown = T) #NA
+
+plot_neighbors("virus", n=15, tvectors = american_tk2) #Virus is associated with "spreading virus willingly" and appears to be calling into question American Airlines willingness to allow a Platinum level customers to skirt the rules with words like "platinum" and "customer".
+
+
+```
+
+
+
+
+DELTA AIRLINES SENTIMENT ANALYSIS
+
+
+```{r}
+head(delta)
+
+delta_raw <- delta
+
+delta_raw$is_retweet <- as.factor(delta_raw$is_retweet)
+delta_raw$source <- as.factor(delta_raw$source)
+ 
+#preprocessing
+delta_raw_token <- tokens(delta_raw$text, what = "word",
+                             remove_numbers = TRUE, remove_punct = TRUE,
+                             remove_symbols = TRUE,
+                             remove_hyphens = TRUE)
+head(delta_raw_token)
+
+delta_raw_dfm <- delta_raw_token %>% 
+  tokens_remove(stopwords(source = "smart")) %>% 
+  tokens_wordstem() %>% 
+  tokens_tolower() %>% 
+  dfm()
+
+delta_raw_dfm
+
+tokenfreq<-textstat_frequency(delta_raw_dfm, n=300)#Uses Quanteda
+head(tokenfreq, 10)
+
+deltatokenfreq1<-data.frame(rowSums(delta_raw_dfm))
+colnames(deltatokenfreq1)<-"Freq"
+summary(deltatokenfreq1) #Mean shows that the Tweeters used around 18.5 characters per Tweet on average
+
+#confirms that there is a large set of Tweets that used about 18 characters per Tweet
+ggplot(deltatokenfreq1, aes(x = Freq)) +
+geom_histogram(binwidth = 1) +
+labs(y = "Number of Documents", x = "Tokens Count Per Document",
+title = "Distribution of Tokens per Document")
+
+# I find it interesting that there are so many spanish words in the wordcloud. Could that imply that spanish speaking customers prefer Delta Airlines?
+textplot_wordcloud(
+  delta_raw_dfm,
+  min_size = 0.9,
+  max_size = 4,
+  min_count = 150,
+  max_words = 2000,
+  color = "darkblue",
+  font = NULL,
+  adjust = 0,
+  rotation = 0.1,
+  random_order = FALSE,
+  random_color = FALSE,
+  ordered_color = FALSE,
+  labelcolor = "gray20",
+  labelsize = 1.5,
+  labeloffset = 0,
+  fixed_aspect = TRUE,
+  comparison = FALSE
+)
+
+#For the first time we see the frequency of Android users surpass Apple product users (iPhone & iPad) by a margin of 35.079 to 35.051. Using just the Delta Airlines data, these Tweeters use Android approximately 6% more as compared to the 3 Airlines as a whole group shown above.
+delta_raw %>%
+  count(source)%>%
+  mutate(freq=(n/sum(n))*100) %>%
+  arrange(desc(freq))
+
+#Again bucking the trends shown by United and American tweeters, those that tweet about Delta retweet only 73% of the time compared to 89% and 93% of these Twitter users from the other Airlines. That means original content is Tweeted nearly 2.5 times more frequently by our Delta tweeters
+delta_raw %>%
+  count(is_retweet == TRUE) %>%
+  mutate(freq=(n/sum(n))) %>%
+  arrange(desc(freq))
+
+```
+
+
+```{r}
+#creating Bing dictionary for Sentiment Analysis
+
+corp_delta <- corpus(delta_raw, text_field = "text")
+positive_bing <- scan("C:/Users/aacou/Desktop/Masters/Text Analytics/Projects/positive-words.txt", what = "char", sep = "\n", skip = 35, quiet = T)
+negative_bing <- scan("C:/Users/aacou/Desktop/Masters/Text Analytics/Projects/negative-words.txt", what = "char", sep = "\n", skip = 35, quiet = T)
+
+sentiment_bing <- dictionary(list(positive = positive_bing, negative = negative_bing))
+
+```
+
+
+```{r}
+delta_dfm_sentiment <- dfm(corp_delta, dictionary = sentiment_bing)
+delta_dfm_sentiment
+```
+
+
+```{r}
+# Using Sentiment Analysis, it shows that an equal number of people tweeting about Delta Airlines at this time have approximately the same positive as negative sentiment. The Negative Mean is 39% while the Positive Mean is only 40%
+delta_dfm_sentiment_df <- convert(delta_dfm_sentiment, to = "data.frame")
+delta_dfm_sentiment_df$net <-(delta_dfm_sentiment_df$positive)-(delta_dfm_sentiment_df$negative)
+summary(delta_dfm_sentiment_df)
+```
+
+
+```{r}
+#Again, negative and positive sentiment are balanced. It appears that so far, Delta is keeping away from any missteps that are swinging public opinion negatively like the other airlines
+delta_output_nrc <- liwcalike(corp_delta,
+                        dictionary = data_dictionary_NRC)
+head(delta_output_nrc)
+
+```
+
+```{r}
+dfm_sentiment_propdelta <- dfm_weight(delta_dfm_sentiment, scheme = "prop")
+dfm_sentiment_propdelta
+
+sentiment_delta <- convert(dfm_sentiment_propdelta, "data.frame") %>%
+  gather(positive, negative, key = "Polarity", value = "Share") %>%
+  mutate(document = as_factor(document)) %>%
+  rename(Review = document)
+
+#Sentiment appears to lean positively for Delta Airlines
+ggplot(sentiment_delta, aes(Review, Share, fill = Polarity, group = Polarity)) +
+geom_bar(stat='identity', position = position_dodge(), size = 1) +
+scale_fill_brewer(palette = "Set1") +
+theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+ggtitle("Sentiment scores in Delta Reviews (relative)")
+
+```
+
+
+DELTA AIRLINES LDA
+
+```{r}
+#LDA
+set.seed(111)
+delta_raw_samp <-delta_raw[sample(nrow(delta_raw), 200), ]#
+delta_raw_token2 <- tokens(delta_raw_samp$text, what = "word",
+                            remove_numbers = TRUE, remove_punct = TRUE,
+                            remove_symbols = TRUE, remove_hyphens = TRUE)
+
+delta_raw_dfm<-delta_raw_token2 %>%
+  tokens_remove(stopwords(source = "smart")) %>%
+  tokens_wordstem() %>%
+  tokens_tolower() %>%
+  dfm()
+
+
+deltarowTotals <- apply(delta_raw_dfm , 1, sum)
+deltadtm.new   <- delta_raw_dfm[deltarowTotals> 0, ]
+
+delta_raw_dfm2 <-deltadtm.new%>% 
+  dfm_trim(min_docfreq = 0.01, max_docfreq = 0.90, docfreq_type = "prop")
+
+delta_demo_token1<-as.matrix(delta_raw_dfm) 
+delta_demo_token1[1:3,1:12]
+
+
+
+K <- 10
+delta_lda <-LDA(delta_raw_dfm, K, method="Gibbs", control=list(iter = 200, verbose = 25))
+delta_topics <- tidy(delta_lda, matrix = "beta")
+
+deltaldaResult <- posterior(delta_lda)
+
+deltabeta <- deltaldaResult$terms # get beta from results
+dim(deltabeta)
+
+deltatheta <- deltaldaResult$topics
+dim(deltatheta)
+
+terms(delta_lda, 10)
+
+delta_topics <- tidy(delta_lda, matrix = "beta")
+
+terms_per_topic <- 10
+delta_top_terms <- delta_topics %>%
+  group_by(topic) %>%
+  top_n(terms_per_topic, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+delta_top_terms <- delta_top_terms %>%
+  group_by(topic) %>%
+  slice(1:terms_per_topic) %>%
+  ungroup()
+
+delta_top_terms$topic <- factor(delta_top_terms$topic)
+
+#If we remove Delta and Airlines, the top terms are "#loultimo" (#thebest), "abordo" (on board), "vuelo" (flight), "el presidente" (the president). It appears that when the President of Mexico flew a commercial flight to visit President Trump in Washington, that caused quite the stir among, presumably, Mexican nationals living in the US and around the world.
+delta_top_terms %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(term, beta, fill=topic)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ topic, scales = "free") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip()
+
+delta_documents <- tidy(delta_lda, matrix = "gamma")
+delta_documents
+
+deltatuningresult <- FindTopicsNumber(delta_raw_dfm,
+                           topics = seq(from = 2, to = 15, by = 1),
+                           metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+                           method = "Gibbs",
+                           control = list(seed = 1971),
+                           mc.cores = NA,
+                           return_models= TRUE,
+                           verbose = TRUE
+)
+
+FindTopicsNumber_plot(deltatuningresult) # looks like around 4 is the ideal topics number
+```
+
+
+DELTA AIRLINES LSA
+
+```{r}
+#LSA
+
+delta_raw_dfm2<-delta_raw_token2 %>%
+  tokens_remove(stopwords(source = "smart")) %>%
+  tokens_tolower() %>%
+  dfm()
+delta_tfidf<-t(dfm_tfidf(delta_raw_dfm2, scheme_tf = "prop", scheme_df = "inverse", base = 10))
+delta_tfidf1<-as.matrix(delta_tfidf)
+delta_tfidf1[1:6,1:6]
+
+delta_LSAspace <- lsa(delta_tfidf, dims=dimcalc_share())
+
+delta_LSAspace$tk[1:5,1:5]
+delta_LSAspace$dk[1:5,1:5]
+delta_LSAspace$sk[1:10]
+
+
+delta_tk2 = t(delta_LSAspace$sk * t(delta_LSAspace$tk))
+delta_dk2 = t(delta_LSAspace$sk * t(delta_LSAspace$dk))
+
+plot(delta_tk2[,1], y= delta_tk2[,2], col="red", cex=.50, main="TK Plot") 
+text(delta_tk2[,1], y= delta_tk2[,2], labels=rownames(delta_tk2) , cex=.70)
+
+plot(delta_dk2[,1], y= delta_dk2[,2], col="blue", pch="+", main="DK Plot")
+text(delta_dk2[,1], y= delta_dk2[,2], labels=rownames(delta_dk2), cex=.70)
+
+delta_cosim <- rownames(delta_tk2)
+delta_cosimSpace <- multicos(delta_cosim, tvectors=delta_tk2, breakdown=TRUE)
+
+#While the purpose of my project was to calculate how impactful Covid has been on the airlines, the cosine similarity points toward the excitement that the Mexican President flew Delta to meet President Trump. Nearly all of the words are in Spanish (I am fluent in Spanish, luckily) and have a high cosine similarity as President and flight are at 99.9% as one example
+
+delta_cosimSpace[1:10,1:10]
+
+delta_cosim2 <- rownames(delta_dk2)
+delta_cosimSpace2 <- multicos(delta_cosim2, tvectors=delta_dk2, breakdown=F)
+delta_cosimSpace2[1:6,1:6]
+
+#I'm most interested in the neighbors of Covid, virus and coronavirus. Coincidentally, NONE of the following neighbors words appeared in Spanish
+neighbors("Covid", n=10, tvectors = delta_tk2, breakdown = T) #"Covid" is close to "tested", "urge", "prevent" and "health". 
+
+neighbors("virus", n=10, tvectors = delta_tk2, breakdown = T) #"virus" came up NA
+
+neighbors("coronavirus", n=10, tvectors = delta_tk2, breakdown = T) #"coronavirus" most closely relates to "federal", "strike" and "deals".
+
+neighbors("delta", n=10, tvectors = delta_tk2, breakdown = T) #Back to spanish, delta is associated with "avion" (airplane), "llego" (arrived), "contarnos" (count us!)
+
+neighbors("safety", n=10, tvectors = delta_tk2, breakdown = T) #For Safety, there is a moderately high association with "crew", "explaining" and "strain" in the mid 70% range
+
+neighbors("billion", n=10, tvectors = delta_tk2, breakdown = T) #delta lost $6 Billion in the 2nd quarter of 2020. The highest correlated neighbors are "midst", "considerable" and "turbulance" surely speaking of the inpact Covid is having on the industry
+
+plot_neighbors("billion", n=15, tvectors = delta_tk2)  
+
+
+```
+
+
